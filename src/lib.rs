@@ -303,6 +303,9 @@ use std::{
 };
 use suffix::*;
 
+#[cfg(feature = "notify")]
+use crossbeam::channel;
+
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 
@@ -394,6 +397,9 @@ pub struct FileRotate<S: SuffixScheme> {
     suffixes: BTreeSet<SuffixInfo<S::Repr>>,
     #[cfg(unix)]
     mode: Option<u32>,
+
+    #[cfg(feature = "notify")]
+    notif_channel: Option<channel::Sender<PathBuf>>,
 }
 
 impl<S: SuffixScheme> FileRotate<S> {
@@ -442,6 +448,8 @@ impl<S: SuffixScheme> FileRotate<S> {
             suffix_scheme,
             #[cfg(unix)]
             mode,
+            #[cfg(feature = "notify")]
+            notif_channel: None,
         };
         s.ensure_log_directory_exists();
         s.scan_suffixes();
@@ -563,7 +571,12 @@ impl<S: SuffixScheme> FileRotate<S> {
         // Do the move
         assert!(old_path.exists());
         assert!(!new_path.exists());
-        fs::rename(old_path, new_path)?;
+        fs::rename(old_path, &new_path)?;
+
+        #[cfg(feature = "notify")]
+        if let Some(tx) = &self.notif_channel {
+            let _ = tx.send(new_path);
+        }
 
         Ok(newly_created_suffix)
     }
@@ -631,6 +644,13 @@ impl<S: SuffixScheme> FileRotate<S> {
         }
 
         result
+    }
+
+    /// set channel to get notifications with the name of the recently
+    /// rotated file
+    #[cfg(feature = "notify")]
+    pub fn set_notification_channel(&mut self, tx: Option<channel::Sender<PathBuf>>) {
+        self.notif_channel = tx;
     }
 }
 
