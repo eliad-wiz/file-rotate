@@ -16,7 +16,7 @@ pub enum Compression {
     OnRotate(usize),
 }
 
-pub(crate) fn compress(path: &Path) -> io::Result<()> {
+pub(crate) fn compress(path: &Path) -> io::Result<PathBuf> {
     let dest_path = PathBuf::from(format!("{}.gz", path.display()));
 
     let mut src_file = File::open(path)?;
@@ -33,5 +33,5 @@ pub(crate) fn compress(path: &Path) -> io::Result<()> {
 
     fs::remove_file(path)?;
 
-    Ok(())
+    Ok(dest_path)
 }
