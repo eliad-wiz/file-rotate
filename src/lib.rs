@@ -504,6 +504,13 @@ impl<S: SuffixScheme> FileRotate<S> {
         self.file = open_options.open(&self.basepath).ok();
     }
 
+    fn notify_rotated_log_file(&self, #[allow(unused_variables)] path: PathBuf) {
+        #[cfg(feature = "notify")]
+        if let Some(tx) = &self.notif_channel {
+            let _ = tx.send(path);
+        }
+    }
+
     fn scan_suffixes(&mut self) {
         self.suffixes = self.suffix_scheme.scan_suffixes(&self.basepath);
     }
@@ -573,9 +580,8 @@ impl<S: SuffixScheme> FileRotate<S> {
         assert!(!new_path.exists());
         fs::rename(old_path, &new_path)?;
 
-        #[cfg(feature = "notify")]
-        if let Some(tx) = &self.notif_channel {
-            let _ = tx.send(new_path);
+        if let Compression::None = self.compression {
+            self.notify_rotated_log_file(new_path);
         }
 
         Ok(newly_created_suffix)
@@ -634,7 +640,9 @@ impl<S: SuffixScheme> FileRotate<S> {
             for info in suffixes_to_compress {
                 // Do the compression
                 let path = info.suffix.to_path(&self.basepath);
-                compress(&path)?;
+
+                let compressed_file = compress(&path)?;
+                self.notify_rotated_log_file(compressed_file);
 
                 self.suffixes.replace(SuffixInfo {
                     compressed: true,
