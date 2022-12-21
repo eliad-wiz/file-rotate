@@ -695,7 +695,7 @@ impl<S: SuffixScheme> Write for FileRotate<S> {
                             }
                         }
                         TimeFrequency::Daily => {
-                            if local.date() > modified.date() {
+                            if local.date_naive() > modified.date_naive() {
                                 self.rotate()?;
                             }
                         }
