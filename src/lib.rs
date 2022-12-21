@@ -606,6 +606,18 @@ impl<S: SuffixScheme> FileRotate<S> {
 
         Ok(())
     }
+
+    /// get the logfile basepath
+    pub fn basepath(&self) -> &Path {
+        self.basepath.as_path()
+    }
+
+    /// get current file size of log file
+    pub fn current_file_size(&self) -> Option<u64> {
+        let file = self.file.as_ref()?;
+        Some(file.metadata().ok()?.len())
+    }
+
     fn handle_old_files(&mut self) -> io::Result<()> {
         // Find the youngest suffix that is too old, and then remove all suffixes that are older or
         // equally old:
