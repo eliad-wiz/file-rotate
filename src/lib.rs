@@ -666,6 +666,13 @@ impl<S: SuffixScheme> FileRotate<S> {
         result
     }
 
+    /// return reference to the underlying file
+    /// NOTE: usually this function shouldn't be used, as working directly on
+    /// the file is hidden for us
+    pub fn file(&self) -> Option<&File> {
+        self.file.as_ref()
+    }
+
     /// set channel to get notifications with the name of the recently
     /// rotated file
     #[cfg(feature = "notify")]
