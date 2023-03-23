@@ -511,9 +511,11 @@ impl<S: SuffixScheme> FileRotate<S> {
         }
     }
 
-    fn scan_suffixes(&mut self) {
+    /// Rescan directory for matching suffixes (i.e. existing log files)
+    pub fn scan_suffixes(&mut self) {
         self.suffixes = self.suffix_scheme.scan_suffixes(&self.basepath);
     }
+
     /// Get paths of rotated log files (excluding the original/current log file), ordered from
     /// oldest to most recent
     pub fn log_paths(&mut self) -> Vec<PathBuf> {
