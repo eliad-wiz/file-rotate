@@ -518,7 +518,7 @@ impl<S: SuffixScheme> FileRotate<S> {
 
     /// Get paths of rotated log files (excluding the original/current log file), ordered from
     /// oldest to most recent
-    pub fn log_paths(&mut self) -> Vec<PathBuf> {
+    pub fn log_paths(&self) -> Vec<PathBuf> {
         self.suffixes
             .iter()
             .rev()
