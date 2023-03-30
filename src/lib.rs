@@ -591,13 +591,14 @@ impl<S: SuffixScheme> FileRotate<S> {
 
     /// Trigger a log rotation manually. This is mostly intended for use with `ContentLimit::None`
     /// but will work with all content limits.
-    pub fn rotate(&mut self) -> io::Result<()> {
+    pub fn rotate(&mut self) -> io::Result<PathBuf> {
         self.ensure_log_directory_exists();
 
         let _ = self.file.take();
 
         // This function will always create a new file. Returns suffix of that file
         let new_suffix_info = self.move_file_with_suffix(None)?;
+        let p = new_suffix_info.to_path(&self.basepath).into();
         self.suffixes.insert(new_suffix_info);
 
         self.open_file();
@@ -606,7 +607,7 @@ impl<S: SuffixScheme> FileRotate<S> {
 
         self.handle_old_files()?;
 
-        Ok(())
+        Ok(p)
     }
 
     /// get the logfile basepath
@@ -765,7 +766,7 @@ impl<S: SuffixScheme> Write for FileRotate<S> {
             }
             ContentLimit::BytesSurpassed(bytes) => {
                 if self.count > bytes {
-                    self.rotate()?
+                    self.rotate()?;
                 }
                 if let Some(ref mut file) = self.file {
                     file.write_all(buf)?;
