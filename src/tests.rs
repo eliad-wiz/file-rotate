@@ -204,6 +204,39 @@ fn write_complete_record_until_bytes_surpassed() {
 }
 
 #[test]
+fn write_complete_record_until_bytes_and_suffix() {
+    let tmp_dir = TempDir::new("file-rotate-test").unwrap();
+    let dir = tmp_dir.path();
+    let log_path = dir.join("log");
+
+    let mut log = FileRotate::new(
+        &log_path,
+        AppendTimestamp::default(FileLimit::MaxFiles(100)),
+        ContentLimit::BytesWithSuffix(15, b"\n"),
+        Compression::None,
+        #[cfg(unix)]
+        None,
+    );
+
+    write!(log, "0123456789\n").unwrap();
+    log.flush().unwrap();
+    assert!(log_path.exists());
+    // shouldn't exist yet - didn't reach bytes count
+    assert!(log.log_paths().is_empty());
+
+    write!(log, "0123456789").unwrap();
+    log.flush().unwrap();
+    assert!(log_path.exists());
+    // shouldn't exist yet - incorrect suffix
+    assert!(log.log_paths().is_empty());
+
+    // This should create the second file
+    write!(log, "0123456789\n").unwrap();
+    log.flush().unwrap();
+    assert!(&log.log_paths()[0].exists());
+}
+
+#[test]
 fn compression_on_rotation() {
     let tmp_dir = TempDir::new("file-rotate-test").unwrap();
     let parent = tmp_dir.path();
