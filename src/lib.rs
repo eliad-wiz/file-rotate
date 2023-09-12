@@ -342,6 +342,8 @@ pub enum ContentLimit {
     Time(TimeFrequency),
     /// Cut the log file after surpassing size in bytes (but having written a complete buffer from a write call.)
     BytesSurpassed(usize),
+    /// Cut the log file after surpassing size in bytes and writing a buffer that ends with a the suffix
+    BytesWithSuffix(usize, &'static [u8]),
     /// Don't do any rotation automatically
     None,
 }
@@ -431,6 +433,9 @@ impl<S: SuffixScheme> FileRotate<S> {
             ContentLimit::BytesSurpassed(bytes) => {
                 assert!(bytes > 0);
             }
+            ContentLimit::BytesWithSuffix(_bytes, suffix) => {
+                assert!(suffix.len() > 0);
+            }
             ContentLimit::None => {}
         };
 
@@ -470,7 +475,9 @@ impl<S: SuffixScheme> FileRotate<S> {
                 None => self.count = 0,
                 Some(ref mut file) => {
                     match self.content_limit {
-                        ContentLimit::Bytes(_) | ContentLimit::BytesSurpassed(_) => {
+                        ContentLimit::Bytes(_)
+                        | ContentLimit::BytesSurpassed(_)
+                        | ContentLimit::BytesWithSuffix(_, _) => {
                             // Update byte `count`
                             if let Ok(metadata) = file.metadata() {
                                 self.count = metadata.len() as usize;
@@ -772,6 +779,16 @@ impl<S: SuffixScheme> Write for FileRotate<S> {
                     file.write_all(buf)?;
                 }
                 self.count += buf.len();
+            }
+            ContentLimit::BytesWithSuffix(bytes, suffix) => {
+                if let Some(ref mut file) = self.file {
+                    file.write_all(buf)?;
+                }
+                self.count += buf.len();
+
+                if self.count > bytes && buf.ends_with(&suffix) {
+                    self.rotate()?;
+                }
             }
             ContentLimit::None => {
                 if let Some(ref mut file) = self.file {
