@@ -293,7 +293,7 @@
 
 use chrono::prelude::*;
 use compression::*;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Seek, SeekFrom};
 use std::{
     cmp::Ordering,
     collections::BTreeSet,
@@ -393,6 +393,7 @@ pub struct FileRotate<S: SuffixScheme> {
     modified: Option<DateTime<Local>>,
     content_limit: ContentLimit,
     count: usize,
+    last_valid_ofs: usize,
     compression: Compression,
     suffix_scheme: S,
     /// The bool is whether or not there's a .gz suffix to the filename
@@ -448,6 +449,7 @@ impl<S: SuffixScheme> FileRotate<S> {
             basepath,
             content_limit,
             count: 0,
+            last_valid_ofs: 0,
             compression,
             suffixes: BTreeSet::new(),
             suffix_scheme,
@@ -481,6 +483,7 @@ impl<S: SuffixScheme> FileRotate<S> {
                             // Update byte `count`
                             if let Ok(metadata) = file.metadata() {
                                 self.count = metadata.len() as usize;
+                                self.last_valid_ofs = self.count;
                             } else {
                                 self.count = 0;
                             }
@@ -611,6 +614,7 @@ impl<S: SuffixScheme> FileRotate<S> {
         self.open_file();
 
         self.count = 0;
+        self.last_valid_ofs = 0;
 
         self.handle_old_files()?;
 
@@ -781,13 +785,28 @@ impl<S: SuffixScheme> Write for FileRotate<S> {
                 self.count += buf.len();
             }
             ContentLimit::BytesWithSuffix(bytes, suffix) => {
-                if let Some(ref mut file) = self.file {
-                    file.write_all(buf)?;
-                }
-                self.count += buf.len();
+                let Some(file) = self.file.as_mut() else {
+                    return Ok(written);
+                };
 
-                if self.count > bytes && buf.ends_with(&suffix) {
-                    self.rotate()?;
+                match file.write_all(buf) {
+                    Ok(_) => self.count += buf.len(),
+                    Err(e) => {
+                        file.set_len(self.last_valid_ofs as u64)?;
+                        file.seek(SeekFrom::Start(self.last_valid_ofs as u64))?;
+                        self.count = self.last_valid_ofs;
+                        return Err(e);
+                    }
+                };
+
+                if buf.ends_with(&suffix) {
+                    // update last valid offset
+                    self.last_valid_ofs = self.count;
+
+                    // and check if we need to rotate
+                    if self.count > bytes {
+                        self.rotate()?;
+                    }
                 }
             }
             ContentLimit::None => {
