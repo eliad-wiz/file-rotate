@@ -67,12 +67,13 @@ pub(crate) fn compress(path: &Path, compression: &CompressionType) -> io::Result
         CompressionType::Gzip(level) => {
             let mut encoder = GzEncoder::new(dest_file, flate2::Compression::new(*level));
             io::copy(&mut src_file, &mut encoder)?;
+            encoder.finish()?;
         }
         #[cfg(feature = "zstd")]
         CompressionType::Zstd(level) => {
-            let mut encoder = zstd::stream::Encoder::new(io::stdout(), *level as i32)?;
-            io::copy(&mut io::stdin(), &mut encoder)?;
-            // encoder.finish()?;
+            let mut encoder = zstd::stream::Encoder::new(dest_file, *level as i32)?;
+            io::copy(&mut src_file, &mut encoder)?;
+            encoder.finish()?;
         }
     }
 
