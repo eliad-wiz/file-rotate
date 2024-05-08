@@ -245,7 +245,11 @@ fn compression_on_rotation() {
         &*log_path.to_string_lossy(),
         AppendCount::new(3),
         ContentLimit::Lines(1),
-        Compression::OnRotate(1), // Keep one file uncompressed
+        Compression::OnRotate {
+            // Keep one file uncompressed
+            keep_uncompressed: 1,
+            compression: CompressionType::default(),
+        },
         #[cfg(unix)]
         None,
     );

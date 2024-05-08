@@ -354,7 +354,7 @@ pub struct SuffixInfo<Repr> {
     /// Suffix
     pub suffix: Repr,
     /// Whether there is a `.gz` suffix after the suffix
-    pub compressed: bool,
+    pub compression_suffix: Option<&'static str>,
 }
 impl<R: PartialEq> PartialEq for SuffixInfo<R> {
     fn eq(&self, other: &Self) -> bool {
@@ -366,8 +366,8 @@ impl<Repr: Representation> SuffixInfo<Repr> {
     /// Append this suffix (and eventual `.gz`) to a path
     pub fn to_path(&self, basepath: &Path) -> PathBuf {
         let path = self.suffix.to_path(basepath);
-        if self.compressed {
-            PathBuf::from(format!("{}.gz", path.display()))
+        if let Some(compression_suffix) = self.compression_suffix {
+            PathBuf::from(format!("{}.{}", path.display(), compression_suffix))
         } else {
             path
         }
@@ -560,10 +560,7 @@ impl<S: SuffixScheme> FileRotate<S> {
         // The destination file/path eventual .gz suffix must match the source path
         let new_suffix_info = SuffixInfo {
             suffix: new_suffix,
-            compressed: old_suffix_info
-                .as_ref()
-                .map(|x| x.compressed)
-                .unwrap_or(false),
+            compression_suffix: old_suffix_info.as_ref().and_then(|x| x.compression_suffix),
         };
         let new_path = new_suffix_info.to_path(&self.basepath);
 
@@ -652,7 +649,11 @@ impl<S: SuffixScheme> FileRotate<S> {
         }
 
         // Compression
-        if let Compression::OnRotate(max_file_n) = self.compression {
+        if let Compression::OnRotate {
+            keep_uncompressed: max_file_n,
+            compression,
+        } = self.compression.clone()
+        {
             let n = (self.suffixes.len() as i32 - max_file_n as i32).max(0) as usize;
             // The oldest N files should be compressed
             let suffixes_to_compress = self
@@ -660,18 +661,18 @@ impl<S: SuffixScheme> FileRotate<S> {
                 .iter()
                 .rev()
                 .take(n)
-                .filter(|info| !info.compressed)
+                .filter(|info| info.compression_suffix.is_none())
                 .cloned()
                 .collect::<Vec<_>>();
             for info in suffixes_to_compress {
                 // Do the compression
                 let path = info.suffix.to_path(&self.basepath);
 
-                let compressed_file = compress(&path)?;
+                let compressed_file = compress(&path, &compression)?;
                 self.notify_rotated_log_file(compressed_file);
 
                 self.suffixes.replace(SuffixInfo {
-                    compressed: true,
+                    compression_suffix: Some(compression.suffix()),
                     ..info
                 });
             }

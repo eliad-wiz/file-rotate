@@ -88,19 +88,29 @@ pub trait SuffixScheme {
             if !filename.starts_with(&*filename_prefix) {
                 continue;
             }
-            let (filename, compressed) = prepare_filename(&*filename);
+            let (filename, compression_suffix) = prepare_filename(&*filename);
             let suffix_str = filename.strip_prefix(&format!("{}.", filename_prefix));
             if let Some(suffix) = suffix_str.and_then(|s| self.parse(s)) {
-                suffixes.insert(SuffixInfo { suffix, compressed });
+                suffixes.insert(SuffixInfo {
+                    suffix,
+                    compression_suffix,
+                });
             }
         }
         suffixes
     }
 }
-fn prepare_filename(path: &str) -> (&str, bool) {
-    path.strip_suffix(".gz")
-        .map(|x| (x, true))
-        .unwrap_or((path, false))
+fn prepare_filename(path: &str) -> (&str, Option<&'static str>) {
+    if let Some(path) = path.strip_suffix(".gz") {
+        return (path, Some("gz"));
+    }
+
+    #[cfg(feature = "zstd")]
+    if let Some(path) = path.strip_suffix(".zst") {
+        return (path, Some("zst"));
+    }
+
+    (path, None)
 }
 
 /// Append a number when rotating the file.
