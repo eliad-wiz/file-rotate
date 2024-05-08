@@ -202,7 +202,7 @@ fn write_complete_record_until_bytes_surpassed() {
 
 #[test]
 fn write_complete_record_until_bytes_and_suffix() {
-    let tmp_dir = TempDir::new("file-rotate-test").unwrap();
+    let tmp_dir = TempDir::new().unwrap();
     let dir = tmp_dir.path();
     let log_path = dir.join("log");
 
@@ -242,7 +242,11 @@ fn compression_on_rotation() {
         &*log_path.to_string_lossy(),
         AppendCount::new(3),
         ContentLimit::Lines(1),
-        Compression::OnRotate(1), // Keep one file uncompressed
+        Compression::OnRotate {
+            // Keep one file uncompressed
+            keep_uncompressed: 1,
+            compression: CompressionType::default(),
+        },
         #[cfg(unix)]
         None,
     );
