@@ -288,7 +288,7 @@
     trivial_numeric_casts,
     unsafe_code,
     unused_import_braces,
-    unused_qualifications
+    // unused_qualifications
 )]
 
 use chrono::prelude::*;
