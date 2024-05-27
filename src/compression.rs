@@ -71,7 +71,16 @@ pub(crate) fn compress(path: &Path, compression: &CompressionType) -> io::Result
         }
         #[cfg(feature = "zstd")]
         CompressionType::Zstd(level) => {
+            let file_size = fs::metadata(path)?.len();
+            if file_size > u32::MAX as u64 {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "File size is too large for zstd",
+                ));
+            }
+
             let mut encoder = zstd::stream::Encoder::new(dest_file, *level as i32)?;
+            encoder.set_parameter(zstd::zstd_safe::CParameter::SrcSizeHint(file_size as u32))?;
             io::copy(&mut src_file, &mut encoder)?;
             encoder.finish()?;
         }
