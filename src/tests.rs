@@ -65,7 +65,6 @@ fn timestamp_max_files_rotation() {
     assert_eq!("m\n", fs::read_to_string(&log_path).unwrap());
 }
 #[test]
-#[cfg(feature = "chrono04")]
 fn timestamp_max_age_deletion() {
     // In order not to have to sleep, and keep it deterministic, let's already create the log files and see how FileRotate
     // cleans up the old ones.
@@ -74,9 +73,7 @@ fn timestamp_max_age_deletion() {
     let log_path = dir.join("log");
 
     // One recent file:
-    let recent_file = chrono::offset::Local::now()
-        .format("log.%Y%m%dT%H%M%S")
-        .to_string();
+    let recent_file = Local::now().format("log.%Y%m%dT%H%M%S").to_string();
     File::create(dir.join(&recent_file)).unwrap();
     // Two very old files:
     File::create(dir.join("log.20200825T151133")).unwrap();
