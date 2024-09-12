@@ -386,6 +386,9 @@ pub struct OpenFileParams {
     /// Sets the mode bits that a new file will be created with
     #[cfg(unix)]
     pub mode: Option<u32>,
+
+    /// Truncate the file (if exists)
+    pub truncate: bool,
 }
 /// The main writer used for rotating logs.
 #[derive(Debug)]
@@ -508,7 +511,13 @@ impl<S: SuffixScheme> FileRotate<S> {
     fn open_file(&mut self) {
         let mut open_options = OpenOptions::new();
 
-        open_options.read(true).create(true).append(true);
+        open_options.read(true).write(true).create(true);
+
+        if self.open_file_params.truncate {
+            open_options.truncate(true);
+        } else {
+            open_options.append(true);
+        }
 
         #[cfg(unix)]
         if let Some(mode) = self.open_file_params.mode {

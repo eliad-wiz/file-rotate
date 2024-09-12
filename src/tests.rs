@@ -297,6 +297,34 @@ fn no_truncate() {
 }
 
 #[test]
+fn do_truncate() {
+    // truncate log file if it already exists
+    let tmp_dir = TempDir::new().unwrap();
+    let parent = tmp_dir.path();
+    let log_path = parent.join("log");
+    let file_rotate = || {
+        let open_file_params = OpenFileParams {
+            truncate: true,
+            ..Default::default()
+        };
+
+        FileRotate::new(
+            &*log_path.to_string_lossy(),
+            AppendCount::new(3),
+            ContentLimit::Lines(10000),
+            Compression::None,
+            Some(open_file_params),
+        )
+    };
+    writeln!(file_rotate(), "A").unwrap();
+    list(parent);
+    writeln!(file_rotate(), "B").unwrap();
+    list(parent);
+
+    assert_eq!("B\n", fs::read_to_string(&log_path).unwrap());
+}
+
+#[test]
 fn byte_count_recalculation() {
     // If there is already some content in the logging file, FileRotate should set its `count`
     // field to the size of the file, so that it rotates at the right time
@@ -371,6 +399,7 @@ fn unix_file_permissions() {
         let log_path = parent.join("log");
         let open_file_params = OpenFileParams {
             mode: Some(*permission),
+            ..Default::default()
         };
 
         let mut file_rotate = FileRotate::new(
