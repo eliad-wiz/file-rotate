@@ -29,7 +29,6 @@
 //!     AppendCount::new(2),
 //!     ContentLimit::Lines(3),
 //!     Compression::None,
-//!     #[cfg(unix)]
 //!     None,
 //! );
 //!
@@ -62,7 +61,6 @@
 //!     AppendCount::new(2),
 //!     ContentLimit::Bytes(5),
 //!     Compression::None,
-//!     #[cfg(unix)]
 //!     None,
 //! );
 //!
@@ -99,7 +97,6 @@
 //!     AppendCount::new(3),
 //!     ContentLimit::Bytes(1),
 //!     Compression::None,
-//!     #[cfg(unix)]
 //!     None,
 //! );
 //!
@@ -158,7 +155,6 @@
 //!     AppendTimestamp::default(FileLimit::MaxFiles(2)),
 //!     ContentLimit::Bytes(1),
 //!     Compression::None,
-//!     #[cfg(unix)]
 //!     None,
 //! );
 //!
@@ -204,7 +200,6 @@
 //!     AppendTimestamp::default(FileLimit::MaxFiles(4)),
 //!     ContentLimit::Bytes(1),
 //!     Compression::OnRotate(2),
-//!     #[cfg(unix)]
 //!     None,
 //! );
 //!
@@ -385,6 +380,13 @@ impl<Repr: Representation> PartialOrd for SuffixInfo<Repr> {
     }
 }
 
+/// Additional parameters for opening the underlying file
+#[derive(Default, Debug)]
+pub struct OpenFileParams {
+    /// Sets the mode bits that a new file will be created with
+    #[cfg(unix)]
+    pub mode: Option<u32>,
+}
 /// The main writer used for rotating logs.
 #[derive(Debug)]
 pub struct FileRotate<S: SuffixScheme> {
@@ -398,8 +400,9 @@ pub struct FileRotate<S: SuffixScheme> {
     suffix_scheme: S,
     /// The bool is whether or not there's a .gz suffix to the filename
     suffixes: BTreeSet<SuffixInfo<S::Repr>>,
-    #[cfg(unix)]
-    mode: Option<u32>,
+
+    /// additional parameters for opening the file
+    open_file_params: OpenFileParams,
 
     #[cfg(feature = "notify")]
     notif_channel: Option<channel::Sender<PathBuf>>,
@@ -421,7 +424,7 @@ impl<S: SuffixScheme> FileRotate<S> {
         suffix_scheme: S,
         content_limit: ContentLimit,
         compression: Compression,
-        #[cfg(unix)] mode: Option<u32>,
+        open_file_params: Option<OpenFileParams>,
     ) -> Self {
         match content_limit {
             ContentLimit::Bytes(bytes) => {
@@ -443,6 +446,8 @@ impl<S: SuffixScheme> FileRotate<S> {
         let basepath = path.as_ref().to_path_buf();
         fs::create_dir_all(basepath.parent().unwrap()).expect("create dir");
 
+        let open_file_params = open_file_params.unwrap_or_default();
+
         let mut s = Self {
             file: None,
             modified: None,
@@ -453,8 +458,7 @@ impl<S: SuffixScheme> FileRotate<S> {
             compression,
             suffixes: BTreeSet::new(),
             suffix_scheme,
-            #[cfg(unix)]
-            mode,
+            open_file_params,
             #[cfg(feature = "notify")]
             notif_channel: None,
         };
@@ -507,7 +511,7 @@ impl<S: SuffixScheme> FileRotate<S> {
         open_options.read(true).create(true).append(true);
 
         #[cfg(unix)]
-        if let Some(mode) = self.mode {
+        if let Some(mode) = self.open_file_params.mode {
             open_options.mode(mode);
         }
 
