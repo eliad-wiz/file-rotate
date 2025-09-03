@@ -1,4 +1,5 @@
 use super::{suffix::*, *};
+use std::iter::once;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use tempfile::TempDir;
@@ -195,8 +196,7 @@ fn write_complete_record_until_bytes_surpassed() {
     assert!(&log.log_paths()[0].exists());
 }
 
-#[test]
-fn write_complete_record_until_bytes_and_suffix() {
+fn test_wrapping_sanity(content_limit: ContentLimit) {
     let tmp_dir = TempDir::new().unwrap();
     let dir = tmp_dir.path();
     let log_path = dir.join("log");
@@ -204,7 +204,7 @@ fn write_complete_record_until_bytes_and_suffix() {
     let mut log = FileRotate::new(
         &log_path,
         AppendTimestamp::default(FileLimit::MaxFiles(100)),
-        ContentLimit::BytesWithSuffix(15, b"\n"),
+        content_limit,
         Compression::None,
         None,
     );
@@ -225,6 +225,124 @@ fn write_complete_record_until_bytes_and_suffix() {
     write!(log, "0123456789\n").unwrap();
     log.flush().unwrap();
     assert!(&log.log_paths()[0].exists());
+}
+
+#[test]
+fn write_complete_record_until_bytes_and_suffix() {
+    test_wrapping_sanity(ContentLimit::BytesWithSuffix(15, b"\n"));
+}
+
+#[test]
+fn test_soft_wrap() {
+    test_wrapping_sanity(ContentLimit::BytesSoftWrap(15, b'\n'));
+}
+
+#[test]
+fn test_soft_wrap_edge_cases() {
+    let tmp_dir = TempDir::new().unwrap();
+    let dir = tmp_dir.path();
+    let log_path = dir.join("log");
+
+    let mut log = FileRotate::new(
+        &log_path,
+        AppendTimestamp::default(FileLimit::MaxFiles(10)),
+        ContentLimit::BytesSoftWrap(5, b'\n'),
+        Compression::None,
+        None,
+    );
+
+    // Simple wrap case
+    write!(log, "A\nB\nC\nD\nE\n").unwrap();
+    assert_eq!(
+        "A\nB\nC\n",
+        fs::read_to_string(&log.log_paths()[0]).unwrap()
+    );
+    // count is 4 here
+    assert_eq!("D\nE\n", fs::read_to_string(&log_path).unwrap());
+
+    // Express how I feel
+    write!(log, "AAAAAAAAAA").unwrap();
+    // We exceeded the soft limit but not wrapping yet (no separator)
+    assert_eq!("D\nE\nAAAAAAAAAA", fs::read_to_string(&log_path).unwrap());
+
+    // Wrap now
+    write!(log, "\n").unwrap();
+    assert_eq!("", fs::read_to_string(&log_path).unwrap());
+
+    // Write a large buffer that would rotate several times
+    let data = "A\n".repeat(1000);
+    write!(log, "{}", data).unwrap();
+    assert_eq!(log.log_paths().len(), 10);
+}
+
+#[test]
+fn test_soft_wrap_dirty_file() {
+    let tmp_dir = TempDir::new().unwrap();
+    let dir = tmp_dir.path();
+    let log_path = dir.join("log");
+
+    // Simulate a leftover file from a previous partial write
+    File::create_new(&log_path)
+        .unwrap()
+        .write_all(b"A")
+        .unwrap();
+
+    let log = FileRotate::new(
+        &log_path,
+        AppendTimestamp::default(FileLimit::MaxFiles(100)),
+        ContentLimit::BytesSoftWrap(5, b'\n'),
+        Compression::None,
+        None,
+    );
+    // Current file should be empty
+    assert_eq!("", fs::read_to_string(&log_path).unwrap());
+    // Rotated file should contain the partial write
+    assert_eq!("A", fs::read_to_string(&log.log_paths()[0]).unwrap());
+}
+
+#[test]
+fn test_soft_wrap_empty_buffer() {
+    let tmp_dir = TempDir::new().unwrap();
+    let dir = tmp_dir.path();
+    let log_path = dir.join("log");
+
+    let mut log = FileRotate::new(
+        &log_path,
+        AppendTimestamp::default(FileLimit::MaxFiles(100)),
+        ContentLimit::BytesSoftWrap(5, b'\n'),
+        Compression::None,
+        None,
+    );
+
+    write!(log, "").unwrap();
+    assert_eq!(log.log_paths().len(), 0);
+    assert_eq!("", fs::read_to_string(&log_path).unwrap());
+}
+
+#[test]
+fn test_soft_wrap_lazy_fox() {
+    let tmp_dir = TempDir::new().unwrap();
+    let dir = tmp_dir.path();
+    let log_path = dir.join("log");
+
+    let mut log = FileRotate::new(
+        &log_path,
+        AppendTimestamp::default(FileLimit::MaxFiles(100)),
+        ContentLimit::BytesSoftWrap(10, b' '),
+        Compression::None,
+        None,
+    );
+    write!(log, "The quick brown fox jumps over the lazy dog").unwrap();
+    let lines: Vec<_> = log
+        .log_paths()
+        .iter()
+        .map(|path| fs::read_to_string(path).unwrap())
+        .chain(once(fs::read_to_string(&log_path).unwrap()))
+        .collect();
+    assert_eq!(
+        lines,
+        vec!["The quick ", "brown fox ", "jumps over ", "the lazy dog",]
+    );
 }
 
 #[test]

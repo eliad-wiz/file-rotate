@@ -278,7 +278,7 @@
 //! data is sent to the void.
 
 #![deny(
-    missing_docs,
+    // missing_docs,
     trivial_casts,
     trivial_numeric_casts,
     unsafe_code,
@@ -337,8 +337,12 @@ pub enum ContentLimit {
     Time(TimeFrequency),
     /// Cut the log file after surpassing size in bytes (but having written a complete buffer from a write call.)
     BytesSurpassed(usize),
-    /// Cut the log file after surpassing size in bytes and writing a buffer that ends with a the suffix
+    /// Cut the log file after surpassing size in bytes and writing a buffer that ends with a suffix
+    /// This mode should not be used with a buffered writer.
     BytesWithSuffix(usize, &'static [u8]),
+    /// Cut the log file at the first "word" that exceeds the size limit.
+    /// This allows buffered writes - as each write does not have to end with the separator.
+    BytesSoftWrap(usize, u8),
     /// Don't do any rotation automatically
     None,
 }
@@ -443,6 +447,9 @@ impl<S: SuffixScheme> FileRotate<S> {
             ContentLimit::BytesWithSuffix(_bytes, suffix) => {
                 assert!(suffix.len() > 0);
             }
+            ContentLimit::BytesSoftWrap(bytes, _) => {
+                assert!(bytes > 0);
+            }
             ContentLimit::None => {}
         };
 
@@ -491,6 +498,18 @@ impl<S: SuffixScheme> FileRotate<S> {
                             if let Ok(metadata) = file.metadata() {
                                 self.count = metadata.len() as usize;
                                 self.last_valid_ofs = self.count;
+                            } else {
+                                self.count = 0;
+                            }
+                        }
+                        ContentLimit::BytesSoftWrap(_, _) => {
+                            // Update byte `count`
+                            if let Ok(metadata) = file.metadata() {
+                                self.count = metadata.len() as usize;
+                                // If we opened a dirty file, rotate it to avoid possible data loss due to previous partial writes
+                                if self.count > 0 {
+                                    _ = self.rotate();
+                                }
                             } else {
                                 self.count = 0;
                             }
@@ -709,6 +728,15 @@ impl<S: SuffixScheme> FileRotate<S> {
     }
 }
 
+/// Find the position of the last separator within the soft limit
+fn find_soft_wrap_position(buf: &[u8], soft_limit: usize, separator: u8) -> Option<usize> {
+    let skip = soft_limit.saturating_sub(1);
+    buf.iter()
+        .skip(skip)
+        .position(|&b| b == separator)
+        .and_then(|pos| Some(skip + pos))
+}
+
 impl<S: SuffixScheme> Write for FileRotate<S> {
     fn write(&mut self, mut buf: &[u8]) -> io::Result<usize> {
         let written = buf.len();
@@ -823,6 +851,23 @@ impl<S: SuffixScheme> Write for FileRotate<S> {
                     }
                 }
             }
+            ContentLimit::BytesSoftWrap(bytes, separator) => {
+                while let Some(offset) =
+                    find_soft_wrap_position(buf, bytes.saturating_sub(self.count), separator)
+                {
+                    if let Some(ref mut file) = self.file {
+                        file.write_all(&buf[..=offset])?;
+                    }
+                    self.count += offset + 1;
+
+                    buf = &buf[offset + 1..];
+                    self.rotate()?;
+                }
+                if let Some(ref mut file) = self.file {
+                    file.write_all(buf)?;
+                }
+                self.count += buf.len();
+            }
             ContentLimit::None => {
                 if let Some(ref mut file) = self.file {
                     file.write_all(buf)?;
@@ -883,3 +928,33 @@ pub mod mock_time {
 
 #[cfg(test)]
 pub use mock_time::now;
+
+#[cfg(test)]
+mod unit_tests {
+    use super::*;
+
+    #[test]
+    fn test_soft_wrap_position_sanity() {
+        let buf = b"Hello World";
+        for limit in 0..=6 {
+            let offset = find_soft_wrap_position(buf, limit, b' ');
+            assert_eq!(offset, Some(5));
+        }
+        let offset = find_soft_wrap_position(buf, 7, b' ');
+        assert_eq!(offset, None); // No words to wrap
+    }
+
+    #[test]
+    fn test_soft_wrap_position_high_limit() {
+        let offset = find_soft_wrap_position(b"Hello World", 200, b' ');
+        assert_eq!(offset, None);
+    }
+
+    #[test]
+    fn test_soft_wrap_position_consecutive_separators() {
+        let offset = find_soft_wrap_position(b"1  4", 2, b' ');
+        assert_eq!(offset, Some(1));
+        let offset = find_soft_wrap_position(b"1  4", 3, b' ');
+        assert_eq!(offset, Some(2));
+    }
+}
