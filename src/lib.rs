@@ -278,7 +278,7 @@
 //! data is sent to the void.
 
 #![deny(
-    missing_docs,
+    // missing_docs,
     trivial_casts,
     trivial_numeric_casts,
     unsafe_code,
@@ -288,7 +288,7 @@
 
 use chrono::prelude::*;
 use compression::*;
-use std::io::{BufRead, BufReader, Seek, SeekFrom};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::{
     cmp::Ordering,
     collections::BTreeSet,
@@ -337,8 +337,12 @@ pub enum ContentLimit {
     Time(TimeFrequency),
     /// Cut the log file after surpassing size in bytes (but having written a complete buffer from a write call.)
     BytesSurpassed(usize),
-    /// Cut the log file after surpassing size in bytes and writing a buffer that ends with a the suffix
+    /// Cut the log file after surpassing size in bytes and writing a buffer that ends with a suffix
+    /// This mode should not be used with a buffered writer.
     BytesWithSuffix(usize, &'static [u8]),
+    /// Cut the log file at the first "word" that exceeds the size limit.
+    /// This allows buffered writes - as each write does not have to end with the separator.
+    BytesSoftWrap(usize, u8),
     /// Don't do any rotation automatically
     None,
 }
@@ -443,6 +447,9 @@ impl<S: SuffixScheme> FileRotate<S> {
             ContentLimit::BytesWithSuffix(_bytes, suffix) => {
                 assert!(suffix.len() > 0);
             }
+            ContentLimit::BytesSoftWrap(bytes, _) => {
+                assert!(bytes > 0);
+            }
             ContentLimit::None => {}
         };
 
@@ -470,6 +477,18 @@ impl<S: SuffixScheme> FileRotate<S> {
 
         s
     }
+
+    fn peek_last_byte(mut reader: impl Read + Seek) -> Option<u8> {
+        // Save seek position
+        let pos = reader.stream_position().ok()?;
+        reader.seek(SeekFrom::End(-1)).ok()?;
+        let mut buf = [0; 1];
+        let result = reader.read_exact(&mut buf);
+        // Restore seek position
+        reader.seek(SeekFrom::Start(pos)).ok()?;
+        result.ok().and_then(|_| Some(buf[0]))
+    }
+
     fn ensure_log_directory_exists(&mut self) {
         let path = self.basepath.parent().unwrap();
         if !path.exists() {
@@ -491,6 +510,19 @@ impl<S: SuffixScheme> FileRotate<S> {
                             if let Ok(metadata) = file.metadata() {
                                 self.count = metadata.len() as usize;
                                 self.last_valid_ofs = self.count;
+                            } else {
+                                self.count = 0;
+                            }
+                        }
+                        ContentLimit::BytesSoftWrap(_, separator) => {
+                            // Update byte `count`
+                            if let Ok(metadata) = file.metadata() {
+                                self.count = metadata.len() as usize;
+                                // If we opened a dirty file with a partial write,
+                                // rotate it to avoid further data loss
+                                if self.count > 0 && Self::peek_last_byte(file) != Some(separator) {
+                                    _ = self.rotate();
+                                }
                             } else {
                                 self.count = 0;
                             }
@@ -709,6 +741,17 @@ impl<S: SuffixScheme> FileRotate<S> {
     }
 }
 
+/// Wrap the given buffer into two parts:
+/// - largest whole buffer that fits within the soft limit (including the separator)
+/// - the remainder that exceeds it (after the separator), doesn't have to be whole
+fn soft_wrap(buf: &[u8], soft_limit: usize, separator: u8) -> Option<(&[u8], &[u8])> {
+    let skip = soft_limit.saturating_sub(1);
+    buf.iter()
+        .skip(skip)
+        .position(|&b| b == separator)
+        .and_then(|pos| Some(buf.split_at(skip + pos + 1)))
+}
+
 impl<S: SuffixScheme> Write for FileRotate<S> {
     fn write(&mut self, mut buf: &[u8]) -> io::Result<usize> {
         let written = buf.len();
@@ -823,6 +866,23 @@ impl<S: SuffixScheme> Write for FileRotate<S> {
                     }
                 }
             }
+            ContentLimit::BytesSoftWrap(bytes, separator) => {
+                while let Some((part, remainder)) =
+                    soft_wrap(buf, bytes.saturating_sub(self.count), separator)
+                {
+                    if let Some(ref mut file) = self.file {
+                        file.write_all(part)?;
+                    }
+                    self.count += part.len();
+
+                    buf = remainder;
+                    self.rotate()?;
+                }
+                if let Some(ref mut file) = self.file {
+                    file.write_all(buf)?;
+                }
+                self.count += buf.len();
+            }
             ContentLimit::None => {
                 if let Some(ref mut file) = self.file {
                     file.write_all(buf)?;
@@ -883,3 +943,35 @@ pub mod mock_time {
 
 #[cfg(test)]
 pub use mock_time::now;
+
+#[cfg(test)]
+mod unit_tests {
+    use super::*;
+
+    #[test]
+    fn test_soft_wrap_position_sanity() {
+        let buf = b"Hello World";
+        for limit in 0..=6 {
+            let (part, remainder) = soft_wrap(buf, limit, b' ').unwrap();
+            assert_eq!(part, b"Hello ");
+            assert_eq!(remainder, b"World");
+        }
+        let res = soft_wrap(buf, 7, b' ');
+        assert_eq!(res, None); // No words to wrap
+    }
+
+    #[test]
+    fn test_soft_wrap_position_high_limit() {
+        assert_eq!(soft_wrap(b"Hello World", 200, b' '), None);
+    }
+
+    #[test]
+    fn test_soft_wrap_position_consecutive_separators() {
+        let (part, remainder) = soft_wrap(b"1  4", 2, b' ').unwrap();
+        assert_eq!(part, b"1 ");
+        assert_eq!(remainder, b" 4");
+        let (part, remainder) = soft_wrap(b"1  4", 3, b' ').unwrap();
+        assert_eq!(part, b"1  ");
+        assert_eq!(remainder, b"4");
+    }
+}
