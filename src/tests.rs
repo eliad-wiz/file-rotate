@@ -276,7 +276,7 @@ fn test_soft_wrap_edge_cases() {
 }
 
 #[test]
-fn test_soft_wrap_dirty_file() {
+fn test_soft_wrap_dirty_corrupted_file() {
     let tmp_dir = TempDir::new().unwrap();
     let dir = tmp_dir.path();
     let log_path = dir.join("log");
@@ -298,6 +298,31 @@ fn test_soft_wrap_dirty_file() {
     assert_eq!("", fs::read_to_string(&log_path).unwrap());
     // Rotated file should contain the partial write
     assert_eq!("A", fs::read_to_string(&log.log_paths()[0]).unwrap());
+}
+
+#[test]
+fn test_soft_wrap_dirty_intact_file() {
+    let tmp_dir = TempDir::new().unwrap();
+    let dir = tmp_dir.path();
+    let log_path = dir.join("log");
+
+    // Simulate a leftover file from a previous partial write
+    File::create_new(&log_path)
+        .unwrap()
+        .write_all(b"A\n")
+        .unwrap();
+
+    let log = FileRotate::new(
+        &log_path,
+        AppendTimestamp::default(FileLimit::MaxFiles(100)),
+        ContentLimit::BytesSoftWrap(5, b'\n'),
+        Compression::None,
+        None,
+    );
+    // Current file is instact - so we continue writing to it
+    assert_eq!("A\n", fs::read_to_string(&log_path).unwrap());
+    // No rotations should have been done
+    assert!(log.log_paths().is_empty());
 }
 
 #[test]

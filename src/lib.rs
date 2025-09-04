@@ -288,7 +288,7 @@
 
 use chrono::prelude::*;
 use compression::*;
-use std::io::{BufRead, BufReader, Seek, SeekFrom};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::{
     cmp::Ordering,
     collections::BTreeSet,
@@ -477,6 +477,18 @@ impl<S: SuffixScheme> FileRotate<S> {
 
         s
     }
+
+    fn peek_last_byte(mut reader: impl Read + Seek) -> Option<u8> {
+        // Save seek position
+        let pos = reader.stream_position().ok()?;
+        reader.seek(SeekFrom::End(-1)).ok()?;
+        let mut buf = [0; 1];
+        let result = reader.read_exact(&mut buf);
+        // Restore seek position
+        reader.seek(SeekFrom::Start(pos)).ok()?;
+        result.ok().and_then(|_| Some(buf[0]))
+    }
+
     fn ensure_log_directory_exists(&mut self) {
         let path = self.basepath.parent().unwrap();
         if !path.exists() {
@@ -502,12 +514,13 @@ impl<S: SuffixScheme> FileRotate<S> {
                                 self.count = 0;
                             }
                         }
-                        ContentLimit::BytesSoftWrap(_, _) => {
+                        ContentLimit::BytesSoftWrap(_, separator) => {
                             // Update byte `count`
                             if let Ok(metadata) = file.metadata() {
                                 self.count = metadata.len() as usize;
-                                // If we opened a dirty file, rotate it to avoid possible data loss due to previous partial writes
-                                if self.count > 0 {
+                                // If we opened a dirty file with a partial write,
+                                // rotate it to avoid further data loss
+                                if self.count > 0 && Self::peek_last_byte(file) != Some(separator) {
                                     _ = self.rotate();
                                 }
                             } else {
@@ -728,13 +741,15 @@ impl<S: SuffixScheme> FileRotate<S> {
     }
 }
 
-/// Find the position of the last separator within the soft limit
-fn find_soft_wrap_position(buf: &[u8], soft_limit: usize, separator: u8) -> Option<usize> {
+/// Wrap the given buffer into two parts:
+/// - largest whole buffer that fits within the soft limit (including the separator)
+/// - the remainder that exceeds it (after the separator), doesn't have to be whole
+fn soft_wrap(buf: &[u8], soft_limit: usize, separator: u8) -> Option<(&[u8], &[u8])> {
     let skip = soft_limit.saturating_sub(1);
     buf.iter()
         .skip(skip)
         .position(|&b| b == separator)
-        .and_then(|pos| Some(skip + pos))
+        .and_then(|pos| Some(buf.split_at(skip + pos + 1)))
 }
 
 impl<S: SuffixScheme> Write for FileRotate<S> {
@@ -852,15 +867,15 @@ impl<S: SuffixScheme> Write for FileRotate<S> {
                 }
             }
             ContentLimit::BytesSoftWrap(bytes, separator) => {
-                while let Some(offset) =
-                    find_soft_wrap_position(buf, bytes.saturating_sub(self.count), separator)
+                while let Some((part, remainder)) =
+                    soft_wrap(buf, bytes.saturating_sub(self.count), separator)
                 {
                     if let Some(ref mut file) = self.file {
-                        file.write_all(&buf[..=offset])?;
+                        file.write_all(part)?;
                     }
-                    self.count += offset + 1;
+                    self.count += part.len();
 
-                    buf = &buf[offset + 1..];
+                    buf = remainder;
                     self.rotate()?;
                 }
                 if let Some(ref mut file) = self.file {
@@ -937,24 +952,26 @@ mod unit_tests {
     fn test_soft_wrap_position_sanity() {
         let buf = b"Hello World";
         for limit in 0..=6 {
-            let offset = find_soft_wrap_position(buf, limit, b' ');
-            assert_eq!(offset, Some(5));
+            let (part, remainder) = soft_wrap(buf, limit, b' ').unwrap();
+            assert_eq!(part, b"Hello ");
+            assert_eq!(remainder, b"World");
         }
-        let offset = find_soft_wrap_position(buf, 7, b' ');
-        assert_eq!(offset, None); // No words to wrap
+        let res = soft_wrap(buf, 7, b' ');
+        assert_eq!(res, None); // No words to wrap
     }
 
     #[test]
     fn test_soft_wrap_position_high_limit() {
-        let offset = find_soft_wrap_position(b"Hello World", 200, b' ');
-        assert_eq!(offset, None);
+        assert_eq!(soft_wrap(b"Hello World", 200, b' '), None);
     }
 
     #[test]
     fn test_soft_wrap_position_consecutive_separators() {
-        let offset = find_soft_wrap_position(b"1  4", 2, b' ');
-        assert_eq!(offset, Some(1));
-        let offset = find_soft_wrap_position(b"1  4", 3, b' ');
-        assert_eq!(offset, Some(2));
+        let (part, remainder) = soft_wrap(b"1  4", 2, b' ').unwrap();
+        assert_eq!(part, b"1 ");
+        assert_eq!(remainder, b" 4");
+        let (part, remainder) = soft_wrap(b"1  4", 3, b' ').unwrap();
+        assert_eq!(part, b"1  ");
+        assert_eq!(remainder, b"4");
     }
 }
