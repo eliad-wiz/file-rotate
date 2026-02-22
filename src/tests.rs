@@ -770,6 +770,47 @@ fn test_panic() {
     assert_eq!("0123", fs::read_to_string(&log_path).unwrap());
 }
 
+/// Backward clock jumps (e.g. NTP sync) must not panic or lose data.
+/// The suffix scheme reuses the newest known timestamp with an
+/// incremented number suffix to avoid collisions.
+#[test]
+fn timestamp_rotation_after_clock_skew() {
+    let tmp_dir = TempDir::new().unwrap();
+    let dir = tmp_dir.path();
+    let log_path = dir.join("log");
+
+    let t1 = get_fake_date_time("2026-02-17T06:14:04");
+    let t2 = get_fake_date_time("2026-02-17T06:14:10");
+
+    mock_time::set_mock_time(t1);
+    let mut log = FileRotate::new(
+        &log_path,
+        AppendTimestamp::default(FileLimit::MaxFiles(10)),
+        ContentLimit::None,
+        Compression::None,
+        None,
+    );
+
+    writeln!(log, "first").unwrap();
+    log.rotate().unwrap();
+
+    mock_time::set_mock_time(t2);
+    writeln!(log, "second").unwrap();
+    log.rotate().unwrap();
+
+    // Clock jumps backward — rotate twice to verify number keeps incrementing
+    mock_time::set_mock_time(t1);
+    writeln!(log, "third").unwrap();
+    log.rotate().unwrap();
+    writeln!(log, "fourth").unwrap();
+    log.rotate().unwrap();
+
+    assert_eq!("first\n", fs::read_to_string(dir.join("log.20260217T061404")).unwrap());
+    assert_eq!("second\n", fs::read_to_string(dir.join("log.20260217T061410")).unwrap());
+    assert_eq!("third\n", fs::read_to_string(dir.join("log.20260217T061410.1")).unwrap());
+    assert_eq!("fourth\n", fs::read_to_string(dir.join("log.20260217T061410.2")).unwrap());
+}
+
 fn get_fake_date_time(date_time: &str) -> DateTime<Local> {
     let date_obj = NaiveDateTime::parse_from_str(date_time, "%Y-%m-%dT%H:%M:%S");
 
