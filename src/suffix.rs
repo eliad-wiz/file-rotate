@@ -250,10 +250,15 @@ impl SuffixScheme for AppendTimestamp {
                 _ => {}
             };
 
-            let fmt_now = now.format(self.format).to_string();
+            let mut fmt_now = now.format(self.format).to_string();
 
             let number = if let Some(newest_suffix) = newest_suffix {
                 if newest_suffix.timestamp == fmt_now {
+                    Some(newest_suffix.number.unwrap_or(0) + 1)
+                } else if newest_suffix.timestamp > fmt_now {
+                    // Suffix collision (e.g. clock went backward)
+                    // Reuse the timestamp of the existing file and increment the number suffix
+                    fmt_now = newest_suffix.timestamp.clone();
                     Some(newest_suffix.number.unwrap_or(0) + 1)
                 } else {
                     None
