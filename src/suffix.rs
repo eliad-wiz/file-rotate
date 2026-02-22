@@ -236,7 +236,7 @@ impl SuffixScheme for AppendTimestamp {
         newest_suffix: Option<&TimestampSuffix>,
         suffix: &Option<TimestampSuffix>,
     ) -> io::Result<TimestampSuffix> {
-        assert!(suffix.is_none());
+        debug_assert!(suffix.is_none());
         if suffix.is_none() {
             let mut now = now();
 
