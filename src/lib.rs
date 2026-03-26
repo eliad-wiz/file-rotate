@@ -682,7 +682,12 @@ impl<S: SuffixScheme> FileRotate<S> {
         let mut result = Ok(());
         for (i, suffix) in self.suffixes.iter().enumerate().rev() {
             if self.suffix_scheme.too_old(&suffix.suffix, i) {
-                result = result.and(fs::remove_file(suffix.to_path(&self.basepath)));
+                let cur_result = match fs::remove_file(suffix.to_path(&self.basepath)) {
+                    Ok(()) => Ok(()),
+                    Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+                    Err(e) => Err(e),
+                };
+                result = result.and(cur_result);
                 youngest_old = Some((*suffix).clone());
             } else {
                 break;
